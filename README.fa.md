@@ -16,6 +16,12 @@ project tracker و status page:
 کل این‌ها با **Terraform** ساخته می‌شه: از لپ‌تاپ یه دستور می‌زنی، Terraform
 از طریق SSH به Docker سرور وصل می‌شه و همه‌ی containerها رو می‌سازه.
 
+## چه شکلیه
+
+![داشبورد Platform Overview](docs/screenshots/overview.png)
+
+screenshotهای بیشتر تو [README.md](README.md#screenshots) و پوشه‌ی `docs/screenshots/`.
+
 ## اول اصطلاح‌ها
 
 | اصطلاح | یعنی چی |

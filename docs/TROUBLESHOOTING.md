@@ -51,3 +51,9 @@ unregistered. Prometheus itself is fine (query it on :9090), only Grafana is
 blind. Fixed with `GF_PLUGINS_PREINSTALL_DISABLED=true` and
 `GF_PLUGINS_PREINSTALL_AUTO_UPDATE=false`. Lesson: verify dashboards through
 Grafana's own query API (`/api/ds/query`), not only against Prometheus.
+
+### Grafana OOM-killed while rendering screenshots
+Rendering eight panels in parallel pushed Grafana past its 768 MB limit and the
+kernel killed it (`HostOomKill` fired, Grafana restarted on its own, the host
+was unaffected because every container has `memory_swap = memory`). Limit
+raised to 1 GB.

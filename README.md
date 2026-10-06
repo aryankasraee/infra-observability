@@ -5,6 +5,8 @@ multi-tenant school SaaS: public sites, admin console, APIs, MongoDB, plus
 Git, project tracker and status page), deployed with Terraform. One `terraform apply` from a laptop builds the whole stack on a
 remote Docker host over SSH.
 
+![Platform Overview dashboard](docs/screenshots/overview.png)
+
 ```
              ┌──────────────── app host (Docker) ───────────────────────┐
  visitors ─▶ │ nginx ─▶ shell / website / console ─▶ backend-core/lms ─▶ mongo
@@ -33,6 +35,20 @@ remote Docker host over SSH.
 | **nginx-exporter / mongodb-exporter** | nginx connections, MongoDB operations and connections |
 | **k6** | Synthetic users (website visitors, failed logins, bots, git readers) so dashboards have traffic |
 | **alert-logger** | 40-line Python webhook: prints each notification as JSON so it lands in Loki |
+
+## Screenshots
+
+Live data from the production host, about two hours of k6 synthetic traffic
+ramping up. Sites are shown by alias (`school-site`, `admin-console`...), not
+by hostname.
+
+| | |
+|---|---|
+| ![Requests per second by site](docs/screenshots/requests-by-site.png) | ![Latency percentiles](docs/screenshots/latency-percentiles.png) |
+| Requests per second per site, parsed from the nginx JSON log by Alloy | p50 / p95 / p99 latency across all sites |
+| ![Black-box probe duration](docs/screenshots/probe-duration.png) | ![k6 requests by scenario](docs/screenshots/k6-rps.png) |
+| Black-box probes through the CDN; the spikes are CDN round-trips | k6 scenarios: website visitors, admin logins, bots, git readers |
+
 
 ## What you need
 

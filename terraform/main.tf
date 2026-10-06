@@ -172,8 +172,8 @@ resource "docker_container" "grafana" {
   name        = "grafana"
   image       = docker_image.this["grafana"].image_id
   restart     = "unless-stopped"
-  memory      = 768
-  memory_swap = 768 # no swap: hit the limit -> restart, not thrash
+  memory      = 1024 # 768 was OOM-killed rendering several dashboards at once
+  memory_swap = 1024 # no swap: hit the limit -> restart, not thrash
   log_opts    = local.log_opts
 
   env = [
