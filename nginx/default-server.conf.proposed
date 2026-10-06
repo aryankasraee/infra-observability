@@ -1,0 +1,29 @@
+# PROPOSED, NOT INSTALLED. Needs a decision first: see the note below.
+#
+# Today nginx has no default_server, so any request whose Host/SNI matches no
+# vhost lands on the FIRST server block (here: the admin console):
+#   - scanners hitting http://<server-ip>/ get the console app (200)
+#   - the bare apex domain (through the CDN) also shows the console
+#
+# This file adds an explicit catch-all that closes those connections.
+# The CDN sends the right Host and SNI for every real vhost (checked in
+# access_json.log: every CDN request carries sni == vhost), so real sites are
+# not affected. If the apex domain should show something, add a server block for
+# it BEFORE installing this.
+#
+# Install as /root/nginx/conf/conf.d/00-default-server.conf, then
+#   docker exec nginx nginx -t && docker exec nginx nginx -s reload
+
+server {
+  listen 80 default_server;
+  listen [::]:80 default_server;
+  server_name _;
+  return 444;   # close the connection without a response
+}
+
+server {
+  listen 443 ssl default_server;
+  listen [::]:443 ssl default_server;
+  server_name _;
+  ssl_reject_handshake on;   # refuse TLS for unknown SNI; no certificate needed
+}

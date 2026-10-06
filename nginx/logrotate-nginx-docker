@@ -1,0 +1,15 @@
+# Installed as /etc/logrotate.d/nginx-docker on the application host.
+# nginx runs in a container with its logs bind-mounted to /root/nginx/logs.
+# copytruncate avoids having to signal nginx inside the container; Alloy
+# notices the truncation and starts reading from the top again.
+/root/nginx/logs/*.log {
+    daily
+    rotate 7
+    maxsize 200M
+    missingok
+    notifempty
+    compress
+    delaycompress
+    copytruncate
+    su root root
+}

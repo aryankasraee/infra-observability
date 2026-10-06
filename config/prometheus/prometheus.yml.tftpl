@@ -1,0 +1,112 @@
+# Rendered by Terraform (templatefile): $${...} come from terraform.tfvars.
+#
+# Prometheus: collects numbers (metrics) from every exporter every 15 seconds,
+# stores them on disk, and evaluates the alert rules in rules/*.yml.
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+  external_labels:
+    env: dev
+    server: ${server_name}
+
+rule_files:
+  - /etc/prometheus/rules/*.yml
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+scrape_configs:
+  # --- the monitoring stack watching itself -------------------------------
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+
+  - job_name: grafana
+    static_configs:
+      - targets: ["grafana:3000"]
+
+  - job_name: loki
+    static_configs:
+      - targets: ["loki:3100"]
+
+  # Alloy also exposes the request metrics it derives from nginx's JSON log
+  # (nginx_log_http_requests_total, nginx_log_http_request_duration_seconds) and the
+  # per-container log line counters (container_log_lines_total).
+  - job_name: alloy
+    static_configs:
+      - targets: ["alloy:12345"]
+
+  # --- the host and its containers ---------------------------------------
+  # node-exporter runs in the host network namespace and listens only on the
+  # docker0 bridge address, so it is not reachable from the internet.
+  - job_name: node
+    static_configs:
+      - targets: ["172.17.0.1:9100"]
+        labels:
+          instance: ${server_name}
+
+  - job_name: cadvisor
+    static_configs:
+      - targets: ["cadvisor:8080"]
+        labels:
+          instance: ${server_name}
+    metric_relabel_configs:
+      # Drop per-cgroup series that have no container name (systemd slices etc.)
+      # to keep the number of series small.
+      - source_labels: [__name__, name]
+        regex: "container_.+;"
+        action: drop
+
+  - job_name: nginx
+    static_configs:
+      - targets: ["nginx-exporter:9113"]
+        labels:
+          instance: ${server_name}
+
+  - job_name: mongodb
+    static_configs:
+      - targets: ["mongodb-exporter:9216"]
+        labels:
+          instance: ${server_name}-mongo
+
+  # --- black-box checks: "does the site answer like a user expects?" ------
+  # Goes out through the public path (CDN, DNS, TLS) exactly like a visitor.
+  # `site` is a short alias so dashboards don't need the real hostnames.
+  - job_name: blackbox-http
+    metrics_path: /probe
+    static_configs:
+%{ for s in sites ~}
+      - targets: ["${s.url}"]
+        labels:
+          probe: public
+          site: ${s.name}
+          __param_module: ${s.module}
+%{ endfor ~}
+    relabel_configs: &blackbox_relabel
+      - source_labels: [__address__]
+        target_label: __param_target
+      - source_labels: [site]
+        target_label: instance
+      - target_label: __address__
+        replacement: blackbox:9115
+
+%{ if api_probe != null ~}
+  # An application API that touches every layer (proxy -> app -> database).
+  - job_name: blackbox-api
+    metrics_path: /probe
+    params:
+      module: [app_api]
+    static_configs:
+      - targets: ["${api_probe.url}"]
+        labels:
+          probe: api
+          site: ${api_probe.name}
+    relabel_configs: *blackbox_relabel
+%{ endif ~}

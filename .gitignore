@@ -1,0 +1,11 @@
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.*
+terraform/terraform.tfvars
+terraform/.terraform.tfstate.lock.info
+*.tfplan
+# Local
+.DS_Store
+reports/raw/
+build/

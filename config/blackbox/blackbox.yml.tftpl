@@ -1,0 +1,43 @@
+# Rendered by Terraform (templatefile).
+#
+# Blackbox exporter: Prometheus asks it "please open this URL and tell me
+# what happened" (status code, time taken, TLS certificate expiry...).
+modules:
+  http_2xx:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      follow_redirects: true
+      preferred_ip_protocol: ip4
+
+  # The application API probe. Headers and the text the body must contain
+  # come from var.api_probe in terraform.tfvars.
+  app_api:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+%{ if api_probe != null ~}
+      headers:
+%{ for k, v in api_probe.headers ~}
+        ${k}: ${v}
+%{ endfor ~}
+        Accept: application/json
+      valid_status_codes: [200]
+%{ if api_probe.expect != "" ~}
+      fail_if_body_not_matches_regexp:
+        - '${api_probe.expect}'
+%{ endif ~}
+%{ endif ~}
+
+  # Some services (the MCP server) answer 404 on "/" by design. Any HTTP
+  # answer below 500 means the process is alive.
+  http_any_answer:
+    prober: http
+    timeout: 10s
+    http:
+      method: GET
+      preferred_ip_protocol: ip4
+      valid_status_codes: [200, 204, 301, 302, 401, 403, 404, 405]

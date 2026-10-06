@@ -1,0 +1,208 @@
+# Rendered by Terraform (templatefile). $${...} is Terraform, {{ ... }} is Prometheus.
+#
+# Alert rules. Each rule is a PromQL question that should normally return
+# nothing. When it returns something for longer than `for:`, the alert fires
+# and Prometheus hands it to Alertmanager.
+#
+# severity: critical = users are affected now; warning = will hurt soon.
+
+groups:
+  - name: host
+    rules:
+      - alert: HostDown
+        expr: up{job="node"} == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "Host metrics are gone"
+          description: "node-exporter on {{ $labels.instance }} has not answered for 2 minutes."
+
+      - alert: HostHighCpu
+        expr: 100 * (1 - avg by (instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) > 85
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "CPU above 85% for 10 minutes"
+          description: "CPU on {{ $labels.instance }} is {{ $value | printf \"%.0f\" }}% busy."
+
+      - alert: HostLowMemory
+        expr: 100 * node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes < 10
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Less than 10% memory available"
+          description: "Only {{ $value | printf \"%.1f\" }}% of RAM is available on {{ $labels.instance }}."
+
+      - alert: HostSwapHeavy
+        expr: 100 * (1 - node_memory_SwapFree_bytes / node_memory_SwapTotal_bytes) > 90
+        for: 15m
+        labels: {severity: warning}
+        annotations:
+          summary: "Swap more than 90% used"
+          description: "Swap is {{ $value | printf \"%.0f\" }}% full; the box is short on RAM."
+
+      - alert: HostDiskWillFillIn24h
+        expr: |
+          predict_linear(node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}[6h], 24*3600) < 0
+          and node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"} < 0.25
+        for: 30m
+        labels: {severity: warning}
+        annotations:
+          summary: "Root disk will be full within 24h at the current rate"
+          description: "Free space on / is trending to zero."
+
+      - alert: HostDiskAlmostFull
+        expr: 100 * (1 - node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) > 90
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Root disk more than 90% full"
+          description: "/ is {{ $value | printf \"%.0f\" }}% full. Docker images and logs are the usual suspects."
+
+      - alert: HostOomKill
+        expr: increase(node_vmstat_oom_kill[10m]) > 0
+        labels: {severity: warning}
+        annotations:
+          summary: "The kernel killed a process for lack of memory"
+          description: "{{ $value | printf \"%.0f\" }} OOM kill(s) in the last 10 minutes."
+
+  - name: containers
+    rules:
+      # The application's containers must always exist and be running
+      # (list: var.app_containers).
+      - alert: AppContainerMissing
+        expr: |
+%{ for i, c in app_containers ~}
+          ${i == 0 ? "" : "or "}absent(container_last_seen{name="${c}"})
+%{ endfor ~}
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "An application container is not running"
+          description: "One of: ${join(", ", app_containers)} is gone."
+
+      - alert: ContainerRestarting
+        expr: changes(container_start_time_seconds{name!=""}[15m]) > 0
+        for: 0m
+        labels: {severity: warning}
+        annotations:
+          summary: "Container {{ $labels.name }} restarted"
+          description: "{{ $labels.name }} started again in the last 15 minutes."
+
+      - alert: ContainerHighMemory
+        expr: |
+          (container_memory_working_set_bytes{name!=""} / on(name) (container_spec_memory_limit_bytes{name!=""} > 0)) * 100 > 90
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "Container {{ $labels.name }} near its memory limit"
+          description: "{{ $labels.name }} uses {{ $value | printf \"%.0f\" }}% of its limit."
+
+  - name: http
+    rules:
+      - alert: SiteDown
+        expr: probe_success{probe="public"} == 0
+        for: 3m
+        labels: {severity: critical}
+        annotations:
+          summary: "{{ $labels.instance }} is down"
+          description: "The black-box probe has failed for 3 minutes (through the CDN, like a real user)."
+
+      - alert: AppApiDown
+        expr: probe_success{probe="api"} == 0
+        for: 3m
+        labels: {severity: critical}
+        annotations:
+          summary: "Application API probe {{ $labels.instance }} is failing"
+          description: "The API did not return the expected answer: proxy, app or database is broken."
+
+      - alert: SiteSlow
+        expr: probe_duration_seconds{probe=~"public|api"} > 3
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.instance }} takes more than 3s to answer"
+          description: "Probe took {{ $value | printf \"%.1f\" }}s."
+
+      - alert: TlsCertExpiresSoon
+        expr: (probe_ssl_earliest_cert_expiry - time()) / 86400 < 14
+        for: 1h
+        labels: {severity: warning}
+        annotations:
+          summary: "TLS certificate for {{ $labels.instance }} expires in under 14 days"
+          description: "{{ $value | printf \"%.0f\" }} days left."
+
+      - alert: High5xxRate
+        expr: |
+          sum by (vhost) (rate(nginx_log_http_requests_total{status_class="5"}[5m]))
+            / sum by (vhost) (rate(nginx_log_http_requests_total[5m])) > 0.05
+          and sum by (vhost) (rate(nginx_log_http_requests_total[5m])) > 0.1
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "More than 5% of requests to {{ $labels.vhost }} fail with 5xx"
+          description: "5xx ratio is {{ $value | humanizePercentage }}."
+
+      - alert: HighLatencyP95
+        expr: |
+          histogram_quantile(0.95, sum by (vhost, le) (rate(nginx_log_http_request_duration_seconds_bucket[5m]))) > 1.5
+          and sum by (vhost) (rate(nginx_log_http_request_duration_seconds_count[5m])) > 0.1
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "p95 latency on {{ $labels.vhost }} above 1.5s"
+          description: "95% of requests finish within {{ $value | printf \"%.2f\" }}s; the slowest 5% take longer."
+
+      - alert: NginxDown
+        expr: nginx_up == 0
+        for: 1m
+        labels: {severity: critical}
+        annotations:
+          summary: "nginx stub_status is not answering"
+          description: "The edge proxy in front of every site looks dead."
+
+  - name: data
+    rules:
+      - alert: MongoDown
+        expr: mongodb_up == 0
+        for: 2m
+        labels: {severity: critical}
+        annotations:
+          summary: "MongoDB is down"
+          description: "mongodb-exporter cannot talk to the application database."
+
+      - alert: MongoTooManyConnections
+        expr: mongodb_ss_connections{conn_type="current"} > 500
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "MongoDB has more than 500 open connections"
+          description: "{{ $value }} connections. Something is leaking connections."
+
+  - name: logs
+    rules:
+      - alert: ErrorLogBurst
+        expr: sum by (container) (rate(container_log_lines_total{level="error"}[5m])) * 60 > 30
+        for: 10m
+        labels: {severity: warning}
+        annotations:
+          summary: "{{ $labels.container }} writes more than 30 error lines per minute"
+          description: "Look at {container=\"{{ $labels.container }}\"} in Grafana Explore (Loki)."
+
+  - name: monitoring
+    rules:
+      - alert: ScrapeTargetDown
+        expr: up{job!="node"} == 0
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Prometheus cannot scrape {{ $labels.job }}"
+          description: "Target {{ $labels.instance }} of job {{ $labels.job }} is down; its metrics are missing."
+
+      - alert: LoadGeneratorStopped
+        expr: absent_over_time(k6_http_reqs_total[10m])
+        for: 5m
+        labels: {severity: info}
+        annotations:
+          summary: "The synthetic traffic generator is not sending requests"
+          description: "k6 has stopped writing metrics. Expected after its scheduled run ends."

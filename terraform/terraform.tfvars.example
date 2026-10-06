@@ -1,0 +1,32 @@
+# Copy to terraform.tfvars and fill in. terraform.tfvars is git-ignored.
+ssh_host = "203.0.113.10"
+ssh_user = "root"
+ssh_port = 22
+
+server_name = "app-server"
+app_network = "myapp_default" # docker network your database lives on
+
+# Sites to watch. `name` is what dashboards show instead of the hostname.
+sites = [
+  { name = "school-site", host = "school.example.com", url = "https://school.example.com/" },
+  { name = "admin-console", host = "console.example.com", url = "https://console.example.com/" },
+  { name = "git", host = "git.example.com", url = "https://git.example.com/api/healthz" },
+  { name = "mcp", host = "mcp.example.com", url = "https://mcp.example.com/", module = "http_any_answer" },
+]
+
+# Optional: one API call that exercises proxy -> app -> database.
+api_probe = {
+  name    = "school-api"
+  url     = "https://school.example.com/api/lms/cms/public/site"
+  headers = { "X-Tenant-Slug" = "demo-tenant" }
+  expect  = "\"slug\":\"demo-tenant\""
+}
+
+app_containers = ["myapp-backend-1", "myapp-frontend-1", "myapp-mongo-1", "nginx"]
+
+loadgen = {
+  site_host  = "school.example.com"
+  admin_host = "console.example.com"
+  git_host   = "git.example.com"
+  tenant     = "demo-tenant"
+}

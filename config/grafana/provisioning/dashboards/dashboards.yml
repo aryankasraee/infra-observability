@@ -1,0 +1,13 @@
+# Every JSON file in /etc/grafana/dashboards becomes a dashboard in the
+# "Platform" folder. Edit the JSON in git, re-apply, Grafana picks it up.
+apiVersion: 1
+
+providers:
+  - name: platform
+    folder: Platform
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 60
+    options:
+      path: /etc/grafana/dashboards

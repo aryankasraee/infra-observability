@@ -1,0 +1,64 @@
+# Checks that run without a server: Terraform formatting and validity,
+# Prometheus config and alert rules, Alertmanager config, k6 script syntax,
+# and that the generated dashboard is up to date.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: 1.16.4
+      - run: terraform -chdir=terraform fmt -check -recursive
+      - run: terraform -chdir=terraform init -backend=false
+      - run: terraform -chdir=terraform validate
+
+  configs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: hashicorp/setup-terraform@v4.0.1
+        with:
+          terraform_version: 1.16.4
+          terraform_wrapper: false
+      - name: Render templates with the example variables
+        run: |
+          terraform -chdir=terraform init -backend=false
+          scripts/render-configs.sh
+      - name: Alert rules
+        run: >
+          docker run --rm -v "$PWD/build/prometheus/rules:/r" --entrypoint promtool
+          prom/prometheus:v3.15.0 check rules /r/alerts.yml
+      - name: Prometheus config
+        # rule_files points at the in-container path, so mount the rules there.
+        run: >
+          docker run --rm
+          -v "$PWD/build/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml"
+          -v "$PWD/build/prometheus/rules:/etc/prometheus/rules"
+          --entrypoint promtool prom/prometheus:v3.15.0
+          check config --syntax-only /etc/prometheus/prometheus.yml
+      - name: Blackbox config
+        run: >
+          docker run --rm -v "$PWD/build/blackbox:/b" prom/blackbox-exporter:v0.28.0
+          --config.file=/b/blackbox.yml --config.check
+      - name: Alertmanager config
+        run: >
+          docker run --rm -v "$PWD/config/alertmanager:/a" --entrypoint amtool
+          prom/alertmanager:v0.34.1 check-config /a/alertmanager.yml
+      - name: Alloy config syntax
+        run: >
+          docker run --rm -v "$PWD/build/alloy:/c" grafana/alloy:v1.20.1
+          fmt /c/config.alloy > /dev/null
+      - name: k6 script
+        run: docker run --rm -v "$PWD/loadgen:/s" grafana/k6:2.3.0 inspect /s/scenarios.js > /dev/null
+      - name: Dashboard is generated from the script
+        run: |
+          python3 scripts/gen_overview_dashboard.py
+          git diff --exit-code config/grafana/dashboards/overview.json

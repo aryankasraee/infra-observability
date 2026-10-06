@@ -1,0 +1,166 @@
+// Rendered by Terraform (templatefile).
+// Grafana Alloy: the log collector.
+//
+// Two pipelines:
+//   1. nginx JSON access log  -> parse -> request metrics + ship to Loki
+//   2. every docker container's stdout/stderr -> tag level -> ship to Loki
+//
+// Metrics made here are exposed on :12345/metrics and scraped by Prometheus.
+
+logging {
+  level  = "warn"
+  format = "logfmt"
+}
+
+// ---------------------------------------------------------------------------
+// 1. nginx
+// ---------------------------------------------------------------------------
+
+local.file_match "nginx" {
+  path_targets = [{
+    __path__ = "/var/log/nginx/access_json.log",
+    job      = "nginx",
+    server   = "${server_name}",
+  }]
+}
+
+loki.source.file "nginx" {
+  targets       = local.file_match.nginx.targets
+  forward_to    = [loki.process.nginx.receiver]
+  tail_from_end = true
+}
+
+loki.process "nginx" {
+  stage.json {
+    expressions = {
+      vhost        = "vhost",
+      status       = "status",
+      method       = "method",
+      request_time = "request_time",
+    }
+  }
+
+  // "503" -> "5". Keeps the label small (5 values) instead of ~60 codes.
+  stage.regex {
+    source     = "status"
+    expression = "^(?P<status_class>\\d)"
+  }
+
+  // Map each known Host header to its short site alias (var.sites); scanners'
+  // junk Host headers and bare IPs all become "other". Keeps label values few
+  // and keeps real hostnames out of dashboards.
+  stage.template {
+    source   = "vhost_label"
+    template = "%{ for s in sites }{{ if eq .vhost \"${s.host}\" }}${s.name}{{ else }}%{ endfor }other%{ for s in sites }{{ end }}%{ endfor }"
+  }
+
+  stage.labels {
+    values = {
+      vhost        = "vhost_label",
+      status_class = "",
+    }
+  }
+
+  stage.metrics {
+    metric.counter {
+      name        = "http_requests_total"
+      prefix      = "nginx_log_"
+      description = "Requests seen in the nginx access log"
+      match_all   = true
+      action      = "inc"
+      max_idle_duration = "24h"
+    }
+    metric.histogram {
+      name        = "http_request_duration_seconds"
+      prefix      = "nginx_log_"
+      description = "nginx $request_time in seconds"
+      source      = "request_time"
+      buckets     = [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30]
+      max_idle_duration = "24h"
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+// ---------------------------------------------------------------------------
+// 2. docker containers
+// ---------------------------------------------------------------------------
+
+discovery.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  refresh_interval = "30s"
+}
+
+discovery.relabel "containers" {
+  targets = []
+
+  rule {
+    source_labels = ["__meta_docker_container_name"]
+    regex         = "/(.*)"
+    target_label  = "container"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_project"]
+    target_label  = "compose_project"
+  }
+  rule {
+    source_labels = ["__meta_docker_container_log_stream"]
+    target_label  = "stream"
+  }
+  rule {
+    target_label = "server"
+    replacement  = "${server_name}"
+  }
+}
+
+loki.source.docker "containers" {
+  host             = "unix:///var/run/docker.sock"
+  targets          = discovery.docker.containers.targets
+  relabel_rules    = discovery.relabel.containers.rules
+  refresh_interval = "30s"
+  forward_to       = [loki.process.containers.receiver]
+}
+
+loki.process "containers" {
+  // NestJS prints ANSI colours; strip them so searches work.
+  stage.replace {
+    expression = "(\\x1b\\[[0-9;]*m)"
+    replace    = ""
+  }
+
+  // Rough level detection that works across Nest, Go, Python and nginx logs.
+  stage.regex {
+    expression = "(?i)(?P<level>\\b(?:fatal|panic|error|err|warn|warning)\\b)"
+  }
+  stage.template {
+    source   = "level"
+    template = "{{ $l := ToLower .Value }}{{ if or (eq $l \"err\") (eq $l \"fatal\") (eq $l \"panic\") }}error{{ else if eq $l \"warning\" }}warn{{ else if eq $l \"\" }}info{{ else }}{{ $l }}{{ end }}"
+  }
+  stage.labels {
+    values = { level = "" }
+  }
+
+  stage.metrics {
+    metric.counter {
+      name        = "log_lines_total"
+      prefix      = "container_"
+      description = "Log lines per container and detected level"
+      match_all   = true
+      action      = "inc"
+      max_idle_duration = "24h"
+    }
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+// ---------------------------------------------------------------------------
+// output
+// ---------------------------------------------------------------------------
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}
